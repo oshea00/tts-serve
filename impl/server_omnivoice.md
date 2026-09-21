@@ -58,8 +58,9 @@ The launcher (`tools/serve.py`, stdlib-only, Python 3.11+) builds
 [`envs/omnivoice/pyproject.toml`](../envs/omnivoice/pyproject.toml) on first
 use, then starts the server. On later starts it re-runs `uv sync` only when
 the env's pyproject, its `.python-version`, or the OmniVoice checkout's
-`pyproject.toml` has changed. Use `--sync` to force a sync, and `--list` to see
-each env's status.
+`pyproject.toml` has changed. Use `--sync` to force a sync, `--port N` to run
+on a port other than 7500 (it sets `OMNIVOICE_PORT`), and `--list` to see each
+env's status.
 
 Without the launcher, the same steps by hand are:
 

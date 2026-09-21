@@ -8,6 +8,7 @@ os.execv stubbed out, so nothing is installed and no server starts.  One
 test checks the real committed envs/*/pyproject.toml files.
 """
 
+import argparse
 import os
 import types
 from pathlib import Path
@@ -26,10 +27,21 @@ OLD = 1_700_000_000
 NEW = OLD + 1_000
 
 
-def _write_env(repo: Path, name: str, server: str | None = "impl/server_foo.py", sources: str = "") -> Path:
+def _write_env(
+    repo: Path,
+    name: str,
+    server: str | None = "impl/server_foo.py",
+    sources: str = "",
+    env_prefix: str | None = '"FOO"',
+) -> Path:
+    """Write envs/<name>/.  ``env_prefix`` is a raw TOML value (None omits the key)."""
     env_dir = repo / "envs" / name
     env_dir.mkdir(parents=True)
-    tool = f'[tool.tts-serve]\nserver = "{server}"\n' if server is not None else ""
+    tool = ""
+    if server is not None:
+        tool = f'[tool.tts-serve]\nserver = "{server}"\n'
+        if env_prefix is not None:
+            tool += f"env-prefix = {env_prefix}\n"
     (env_dir / "pyproject.toml").write_text(
         f'[project]\nname = "env-{name}"\nversion = "0.1.0"\n\n{tool}{sources}',
         encoding="utf-8",
@@ -79,7 +91,10 @@ def repo(tmp_path):
 
 @pytest.fixture
 def calls(monkeypatch):
-    """Stub uv, subprocess.run and os.execv; record what the launcher asked for."""
+    """Stub uv, subprocess.run and os.execve; record what the launcher asked for.
+
+    ``execv`` entries are (python path, argv, environment) triples.
+    """
     record = types.SimpleNamespace(sync=[], execv=[], sync_returncode=0, uv="/usr/bin/uv")
 
     def fake_which(name):
@@ -95,12 +110,12 @@ def calls(monkeypatch):
             python.touch()
         return types.SimpleNamespace(returncode=record.sync_returncode)
 
-    def fake_execv(path, argv):
-        record.execv.append((Path(path), argv))
+    def fake_execve(path, argv, env):
+        record.execv.append((Path(path), argv, env))
 
     monkeypatch.setattr(serve.shutil, "which", fake_which)
     monkeypatch.setattr(serve.subprocess, "run", fake_run)
-    monkeypatch.setattr(serve.os, "execv", fake_execv)
+    monkeypatch.setattr(serve.os, "execve", fake_execve)
     return record
 
 
@@ -178,10 +193,39 @@ def test_load_env_withMissingServerScript_raisesServeError(repo):
         serve.load_env(repo, "bar")
 
 
+def test_load_env_readsEnvPrefix(repo):
+    assert serve.load_env(repo, "foo").env_prefix == "FOO"
+
+
+def test_load_env_withoutEnvPrefix_isNone(repo):
+    # GIVEN an env that doesn't declare env-prefix (only --port needs it)
+    _write_env(repo, "bar", env_prefix=None)
+    # THEN it still loads
+    assert serve.load_env(repo, "bar").env_prefix is None
+
+
+@pytest.mark.parametrize("value", ['"omnivoice"', '"1FOO"', '"FOO-BAR"', '""', "5"])
+def test_load_env_withMalformedEnvPrefix_raisesServeError(repo, value):
+    _write_env(repo, "bar", env_prefix=value)
+    with pytest.raises(serve.ServeError, match="malformed \\[tool.tts-serve\\] env-prefix"):
+        serve.load_env(repo, "bar")
+
+
 def test_load_env_withMalformedToml_raisesServeError(repo):
     (repo / "envs" / "foo" / "pyproject.toml").write_text("[project\n", encoding="utf-8")
     with pytest.raises(serve.ServeError, match="Cannot read"):
         serve.load_env(repo, "foo")
+
+
+@pytest.mark.parametrize("value, expected", [("1", 1), ("7501", 7501), ("65535", 65535)])
+def test_port_number_withValidPort_returnsInt(value, expected):
+    assert serve.port_number(value) == expected
+
+
+@pytest.mark.parametrize("value", ["0", "65536", "-1", "abc", "75.5", ""])
+def test_port_number_withInvalidPort_raisesArgumentTypeError(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        serve.port_number(value)
 
 
 def test_venv_python_onWindows_usesScriptsDir(tmp_path):
@@ -287,16 +331,23 @@ def test_main_withUnknownEngine_exits2AndListsAvailable(repo, capsys, calls):
 # ---------------------------------------------------------------------------
 
 
-def test_main_withReadyEnv_execsServerWithoutUv(repo, calls, capsys):
-    # GIVEN a ready venv and no uv on PATH (none is needed)
+def test_main_withReadyEnv_execsServerWithoutUv(repo, calls, capsys, monkeypatch):
+    # GIVEN a ready venv, no uv on PATH (none is needed), and a port already
+    # set in the environment
     python = _make_venv(repo / "envs" / "foo")
     calls.uv = None
-    # WHEN starting
+    monkeypatch.setenv("FOO_PORT", "8500")
+    # WHEN starting without --port
     assert serve.main(["foo"], repo_root=repo) == 0
-    # THEN no sync ran and the venv python replaced the launcher with the server
+    # THEN no sync ran, the venv python replaced the launcher with the server,
+    # and the environment was passed through untouched
     assert calls.sync == []
-    assert calls.execv == [(python, [str(python), str((repo / "impl" / "server_foo.py").resolve())])]
-    assert "Starting impl/server_foo.py with envs/foo/.venv/bin/python" in capsys.readouterr().out
+    ((path, argv, env),) = calls.execv
+    assert path == python
+    assert argv == [str(python), str((repo / "impl" / "server_foo.py").resolve())]
+    assert env == dict(os.environ)
+    out = capsys.readouterr().out
+    assert "Starting impl/server_foo.py with envs/foo/.venv/bin/python\n" in out
 
 
 def test_main_withUnbuiltVenv_syncsStampsAndExecs(repo, calls, capsys, monkeypatch):
@@ -377,12 +428,74 @@ def test_main_withBrokenEnv_exits1(repo, calls, capsys):
 def test_main_whenExecFails_exits1(repo, calls, capsys, monkeypatch):
     _make_venv(repo / "envs" / "foo")
 
-    def failing_execv(path, argv):
+    def failing_execve(path, argv, env):
         raise PermissionError(13, "Permission denied")
 
-    monkeypatch.setattr(serve.os, "execv", failing_execv)
+    monkeypatch.setattr(serve.os, "execve", failing_execve)
     assert serve.main(["foo"], repo_root=repo) == 1
     assert "Cannot start envs/foo/.venv/bin/python" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --port
+# ---------------------------------------------------------------------------
+
+
+def test_main_withPort_setsPrefixedPortVariable(repo, calls, capsys, monkeypatch):
+    # GIVEN a ready venv, a port already set in the environment, and another
+    # server variable
+    _make_venv(repo / "envs" / "foo")
+    monkeypatch.setenv("FOO_PORT", "8500")
+    monkeypatch.setenv("FOO_HOST", "127.0.0.1")
+    # WHEN starting with --port
+    assert serve.main(["foo", "--port", "7501"], repo_root=repo) == 0
+    # THEN the flag wins over the environment, and nothing else changes
+    ((_, _, env),) = calls.execv
+    assert env["FOO_PORT"] == "7501"
+    assert env["FOO_HOST"] == "127.0.0.1"
+    assert {k: v for k, v in env.items() if k != "FOO_PORT"} == {
+        k: v for k, v in os.environ.items() if k != "FOO_PORT"
+    }
+    assert "Starting impl/server_foo.py with envs/foo/.venv/bin/python (FOO_PORT=7501)" in (
+        capsys.readouterr().out
+    )
+
+
+def test_main_withPort_doesNotChangeLauncherEnvironment(repo, calls, monkeypatch):
+    # The port goes to the server only; the launcher's own os.environ (and so
+    # uv's environment) is left alone.
+    _make_venv(repo / "envs" / "foo")
+    monkeypatch.delenv("FOO_PORT", raising=False)
+    serve.main(["foo", "--port", "7501", "--sync"], repo_root=repo)
+    assert "FOO_PORT" not in os.environ
+    ((_, sync_env),) = calls.sync
+    assert "FOO_PORT" not in sync_env
+
+
+def test_main_withPortButNoEnvPrefix_exits1BeforeSyncing(repo, calls, capsys):
+    # GIVEN an unbuilt env that doesn't declare env-prefix
+    _write_env(repo, "bar", env_prefix=None)
+    # WHEN starting it with --port
+    assert serve.main(["bar", "--port", "7501"], repo_root=repo) == 1
+    # THEN it fails fast: no sync, no exec, and the error says what's missing
+    err = capsys.readouterr().err
+    assert "no [tool.tts-serve] env-prefix entry, so --port can't be applied" in err
+    assert calls.sync == [] and calls.execv == []
+
+
+def test_main_withoutPortAndNoEnvPrefix_startsNormally(repo, calls):
+    _make_venv(_write_env(repo, "bar", env_prefix=None))
+    assert serve.main(["bar"], repo_root=repo) == 0
+    assert len(calls.execv) == 1
+
+
+@pytest.mark.parametrize("value", ["0", "70000", "http"])
+def test_main_withInvalidPort_exits2(repo, calls, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        serve.main(["foo", "--port", value], repo_root=repo)
+    assert exc.value.code == 2
+    assert "--port" in capsys.readouterr().err
+    assert calls.sync == [] and calls.execv == []
 
 
 # ---------------------------------------------------------------------------
@@ -390,13 +503,20 @@ def test_main_whenExecFails_exits1(repo, calls, capsys, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_committedEnvs_eachNameAnExistingServerScript():
+def test_committedEnvs_eachNameAnExistingServerScriptAndItsPortPrefix():
     # GIVEN the envs/ directories committed to this repo
     names = serve.discover_envs(REAL_REPO)
     assert names, "expected at least one env under envs/"
     for name in names:
         # WHEN loaded
         env = serve.load_env(REAL_REPO, name)
-        # THEN each names a server script in impl/
+        # THEN each names a server script in impl/ ...
         assert env.server.parent == REAL_REPO / "impl"
         assert env.server.name.startswith("server_")
+        # ... and an env-prefix whose <PREFIX>_PORT that script actually reads,
+        # so --port can't silently set a variable the server ignores
+        assert env.env_prefix, f"envs/{name} has no env-prefix"
+        source = env.server.read_text(encoding="utf-8")
+        assert f'os.getenv("{env.env_prefix}_PORT"' in source, (
+            f"{env.server.name} doesn't read {env.env_prefix}_PORT"
+        )

@@ -52,6 +52,9 @@ dependencies = [
 [tool.tts-serve]
 # Server started by tools/serve.py (path relative to the repo root).
 server = "impl/server_omnivoice.py"
+# Prefix of the server's <PREFIX>_HOST / <PREFIX>_PORT variables; lets
+# `tools/serve.py omnivoice --port N` set OMNIVOICE_PORT.
+env-prefix = "OMNIVOICE"
 
 [tool.uv]
 package = false

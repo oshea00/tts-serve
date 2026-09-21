@@ -11,11 +11,13 @@ Usage:
     python3 tools/serve.py omnivoice              # sync if needed, then start
     python3 tools/serve.py omnivoice --sync       # always run uv sync first
     python3 tools/serve.py --list                 # envs, servers, venv status
+    python3 tools/serve.py chatterbox --port 7501 # run next to another engine
     OMNIVOICE_PORT=8500 python3 tools/serve.py omnivoice
 
 The server script comes from ``[tool.tts-serve] server`` in the env's
-pyproject.toml.  The working directory and environment are passed through
-unchanged, so the server's <ENGINE>_* variables work as usual.
+pyproject.toml, and ``--port`` becomes ``<env-prefix>_PORT`` for the server
+(e.g. OMNIVOICE_PORT).  Otherwise the working directory and environment are
+passed through unchanged, so the server's <ENGINE>_* variables work as usual.
 
 Standard library only, on purpose: this must run on the system python3 with
 nothing installed (Python 3.11+, for tomllib).
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -47,6 +50,11 @@ UV_INSTALL_URL = "https://docs.astral.sh/uv/getting-started/installation/"
 # "not built" rather than "needs sync".
 NOT_BUILT = "venv not built yet"
 
+# [tool.tts-serve] env-prefix: the server's <PREFIX>_HOST / <PREFIX>_PORT
+# prefix.  The prefixes don't follow env names (DOTS_TTS, QWEN3TTS_MLX, ...),
+# so each env declares its own.
+_ENV_PREFIX_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+
 
 class ServeError(Exception):
     """A user-facing failure that must exit with status 1."""
@@ -64,6 +72,9 @@ class EngineEnv:
     # pyproject.toml of every local path source (engine checkout,
     # tts-engine-common).
     inputs: list[Path]
+    # Prefix of the server's <PREFIX>_PORT variable; None if the env doesn't
+    # declare one (then --port can't be applied).
+    env_prefix: str | None = None
 
 
 def _display(path: Path, repo_root: Path) -> str:
@@ -132,12 +143,23 @@ def load_env(repo_root: Path, name: str) -> EngineEnv:
             f"Server script {server} (from {_display(pyproject_path, repo_root)}) does not exist."
         )
 
+    env_prefix = pyproject.get("tool", {}).get("tts-serve", {}).get("env-prefix")
+    if env_prefix is not None and not (
+        isinstance(env_prefix, str) and _ENV_PREFIX_RE.fullmatch(env_prefix)
+    ):
+        raise ServeError(
+            f"{_display(pyproject_path, repo_root)} has a malformed [tool.tts-serve] "
+            f'env-prefix {env_prefix!r} (expected e.g. "OMNIVOICE").'
+        )
+
     inputs = [pyproject_path]
     python_version = env_dir / ".python-version"
     if python_version.is_file():
         inputs.append(python_version)
     inputs.extend(_local_source_inputs(env_dir, pyproject))
-    return EngineEnv(name=name, env_dir=env_dir, server=server_path, inputs=inputs)
+    return EngineEnv(
+        name=name, env_dir=env_dir, server=server_path, inputs=inputs, env_prefix=env_prefix
+    )
 
 
 def venv_python(env_dir: Path, windows: bool | None = None) -> Path:
@@ -207,6 +229,17 @@ def format_env_list(repo_root: Path, names: list[str]) -> str:
     return "\n".join(lines)
 
 
+def port_number(value: str) -> int:
+    """argparse type for --port: an integer 1-65535 (anything else exits 2)."""
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid port: {value!r}") from None
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"port must be between 1 and 65535, got {port}")
+    return port
+
+
 def build_parser(available: list[str]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="serve.py",
@@ -219,6 +252,7 @@ def build_parser(available: list[str]) -> argparse.ArgumentParser:
             "examples:\n"
             "  serve.py omnivoice\n"
             "  serve.py omnivoice --sync\n"
+            "  serve.py chatterbox --port 7501\n"
             "  OMNIVOICE_PORT=8500 serve.py omnivoice\n"
             "  serve.py --list"
         ),
@@ -234,6 +268,15 @@ def build_parser(available: list[str]) -> argparse.ArgumentParser:
         "--sync",
         action="store_true",
         help="Run 'uv sync' before starting, even if the venv looks up to date.",
+    )
+    parser.add_argument(
+        "--port",
+        type=port_number,
+        metavar="PORT",
+        help=(
+            "Port for the server to bind (every server defaults to 7500). Passed as "
+            "<env-prefix>_PORT, e.g. OMNIVOICE_PORT, overriding any value already set."
+        ),
     )
     parser.add_argument(
         "--list",
@@ -252,7 +295,7 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     """Run the launcher; return the exit code (0 ok, 1 error; argparse exits 2).
 
     On success the process is replaced by the server, so this only returns
-    when something failed (or when os.execv is stubbed out in tests).
+    when something failed (or when os.execve is stubbed out in tests).
     """
     # Resolved once so relpath-based display stays sane under a symlinked
     # checkout.  Never resolve the venv python itself: it is a symlink to the
@@ -274,6 +317,19 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
 
     try:
         env = load_env(repo_root, args.engine)
+        # Checked before any sync: a sync that then can't start is wasted time.
+        server_env = dict(os.environ)
+        port_note = ""
+        if args.port is not None:
+            if env.env_prefix is None:
+                raise ServeError(
+                    f"{_display(env.env_dir / 'pyproject.toml', repo_root)} has no "
+                    "[tool.tts-serve] env-prefix entry, so --port can't be applied "
+                    '(set it to the prefix of the server\'s <PREFIX>_PORT, e.g. "OMNIVOICE").'
+                )
+            port_var = f"{env.env_prefix}_PORT"
+            server_env[port_var] = str(args.port)
+            port_note = f" ({port_var}={args.port})"
         python = venv_python(env.env_dir)
         reason = sync_reason(env, repo_root, force=args.sync)
         if reason is not None:
@@ -294,14 +350,15 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
         return _fail(str(exc))
 
     print(
-        f"Starting {_display(env.server, repo_root)} with {_display(python, repo_root)}",
+        f"Starting {_display(env.server, repo_root)} with {_display(python, repo_root)}"
+        f"{port_note}",
         flush=True,
     )
     try:
         # Replace this process: signals (Ctrl+C) reach uvicorn directly, and
         # nothing of the launcher lingers.  Buffers were flushed above; exec
         # would discard them.
-        os.execv(python, [str(python), str(env.server)])
+        os.execve(python, [str(python), str(env.server)], server_env)
     except OSError as exc:
         return _fail(f"Cannot start {_display(python, repo_root)}: {exc}")
     return 0
