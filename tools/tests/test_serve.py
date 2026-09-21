@@ -228,6 +228,17 @@ def test_port_number_withInvalidPort_raisesArgumentTypeError(value):
         serve.port_number(value)
 
 
+@pytest.mark.parametrize("value", ["127.0.0.1", "0.0.0.0", "::", "::1", "localhost", "gb10.lan"])
+def test_host_address_withPlausibleHost_returnsIt(value):
+    assert serve.host_address(value) == value
+
+
+@pytest.mark.parametrize("value", ["", " ", "127.0.0.1 ", "local host", "\t"])
+def test_host_address_withEmptyOrWhitespace_raisesArgumentTypeError(value):
+    with pytest.raises(argparse.ArgumentTypeError):
+        serve.host_address(value)
+
+
 def test_venv_python_onWindows_usesScriptsDir(tmp_path):
     assert serve.venv_python(tmp_path, windows=True) == tmp_path / ".venv" / "Scripts" / "python.exe"
     assert serve.venv_python(tmp_path, windows=False) == tmp_path / ".venv" / "bin" / "python"
@@ -499,11 +510,60 @@ def test_main_withInvalidPort_exits2(repo, calls, capsys, value):
 
 
 # ---------------------------------------------------------------------------
+# --host
+# ---------------------------------------------------------------------------
+
+
+def test_main_withHost_setsPrefixedHostVariable(repo, calls, capsys, monkeypatch):
+    # GIVEN a ready venv and a host already set in the environment
+    _make_venv(repo / "envs" / "foo")
+    monkeypatch.setenv("FOO_HOST", "0.0.0.0")
+    # WHEN starting with --host
+    assert serve.main(["foo", "--host", "127.0.0.1"], repo_root=repo) == 0
+    # THEN the flag wins, and the port variable is left alone
+    ((_, _, env),) = calls.execv
+    assert env["FOO_HOST"] == "127.0.0.1"
+    assert "FOO_PORT" not in env or env["FOO_PORT"] == os.environ.get("FOO_PORT")
+    assert "(FOO_HOST=127.0.0.1)" in capsys.readouterr().out
+
+
+def test_main_withHostAndPort_setsBothAndShowsBoth(repo, calls, capsys):
+    _make_venv(repo / "envs" / "foo")
+    assert serve.main(["foo", "--port", "7502", "--host", "::1"], repo_root=repo) == 0
+    ((_, _, env),) = calls.execv
+    assert (env["FOO_HOST"], env["FOO_PORT"]) == ("::1", "7502")
+    # Host first, then port, whatever the order on the command line
+    assert "(FOO_HOST=::1, FOO_PORT=7502)" in capsys.readouterr().out
+
+
+def test_main_withHostButNoEnvPrefix_exits1BeforeSyncing(repo, calls, capsys):
+    _write_env(repo, "bar", env_prefix=None)
+    assert serve.main(["bar", "--host", "127.0.0.1"], repo_root=repo) == 1
+    assert "env-prefix entry, so --host can't be applied" in capsys.readouterr().err
+    assert calls.sync == [] and calls.execv == []
+
+
+def test_main_withHostAndPortButNoEnvPrefix_namesBothFlags(repo, calls, capsys):
+    _write_env(repo, "bar", env_prefix=None)
+    assert serve.main(["bar", "--host", "127.0.0.1", "--port", "7501"], repo_root=repo) == 1
+    assert "so --host and --port can't be applied" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["", "local host"])
+def test_main_withInvalidHost_exits2(repo, calls, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        serve.main(["foo", "--host", value], repo_root=repo)
+    assert exc.value.code == 2
+    assert "--host" in capsys.readouterr().err
+    assert calls.sync == [] and calls.execv == []
+
+
+# ---------------------------------------------------------------------------
 # The committed envs
 # ---------------------------------------------------------------------------
 
 
-def test_committedEnvs_eachNameAnExistingServerScriptAndItsPortPrefix():
+def test_committedEnvs_eachNameAnExistingServerScriptAndItsEnvPrefix():
     # GIVEN the envs/ directories committed to this repo
     names = serve.discover_envs(REAL_REPO)
     assert names, "expected at least one env under envs/"
@@ -513,10 +573,12 @@ def test_committedEnvs_eachNameAnExistingServerScriptAndItsPortPrefix():
         # THEN each names a server script in impl/ ...
         assert env.server.parent == REAL_REPO / "impl"
         assert env.server.name.startswith("server_")
-        # ... and an env-prefix whose <PREFIX>_PORT that script actually reads,
-        # so --port can't silently set a variable the server ignores
+        # ... and an env-prefix whose <PREFIX>_HOST and <PREFIX>_PORT that
+        # script actually reads, so --host / --port can't silently set a
+        # variable the server ignores
         assert env.env_prefix, f"envs/{name} has no env-prefix"
         source = env.server.read_text(encoding="utf-8")
-        assert f'os.getenv("{env.env_prefix}_PORT"' in source, (
-            f"{env.server.name} doesn't read {env.env_prefix}_PORT"
-        )
+        for suffix in ("HOST", "PORT"):
+            assert f'os.getenv("{env.env_prefix}_{suffix}"' in source, (
+                f"{env.server.name} doesn't read {env.env_prefix}_{suffix}"
+            )

@@ -12,12 +12,14 @@ Usage:
     python3 tools/serve.py omnivoice --sync       # always run uv sync first
     python3 tools/serve.py --list                 # envs, servers, venv status
     python3 tools/serve.py chatterbox --port 7501 # run next to another engine
+    python3 tools/serve.py omnivoice --host 127.0.0.1   # local-only
     OMNIVOICE_PORT=8500 python3 tools/serve.py omnivoice
 
 The server script comes from ``[tool.tts-serve] server`` in the env's
-pyproject.toml, and ``--port`` becomes ``<env-prefix>_PORT`` for the server
-(e.g. OMNIVOICE_PORT).  Otherwise the working directory and environment are
-passed through unchanged, so the server's <ENGINE>_* variables work as usual.
+pyproject.toml, and ``--host`` / ``--port`` become ``<env-prefix>_HOST`` /
+``<env-prefix>_PORT`` for the server (e.g. OMNIVOICE_HOST, OMNIVOICE_PORT).
+Otherwise the working directory and environment are passed through unchanged,
+so the server's <ENGINE>_* variables work as usual.
 
 Standard library only, on purpose: this must run on the system python3 with
 nothing installed (Python 3.11+, for tomllib).
@@ -72,8 +74,8 @@ class EngineEnv:
     # pyproject.toml of every local path source (engine checkout,
     # tts-engine-common).
     inputs: list[Path]
-    # Prefix of the server's <PREFIX>_PORT variable; None if the env doesn't
-    # declare one (then --port can't be applied).
+    # Prefix of the server's <PREFIX>_HOST / <PREFIX>_PORT variables; None if
+    # the env doesn't declare one (then --host / --port can't be applied).
     env_prefix: str | None = None
 
 
@@ -240,6 +242,17 @@ def port_number(value: str) -> int:
     return port
 
 
+def host_address(value: str) -> str:
+    """argparse type for --host: non-empty, no whitespace (anything else exits 2).
+
+    Whether the address is one this machine can bind is left to the server,
+    which reports it with the real reason.
+    """
+    if not value or any(ch.isspace() for ch in value):
+        raise argparse.ArgumentTypeError(f"invalid host: {value!r}")
+    return value
+
+
 def build_parser(available: list[str]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="serve.py",
@@ -253,6 +266,7 @@ def build_parser(available: list[str]) -> argparse.ArgumentParser:
             "  serve.py omnivoice\n"
             "  serve.py omnivoice --sync\n"
             "  serve.py chatterbox --port 7501\n"
+            "  serve.py omnivoice --host 127.0.0.1\n"
             "  OMNIVOICE_PORT=8500 serve.py omnivoice\n"
             "  serve.py --list"
         ),
@@ -268,6 +282,16 @@ def build_parser(available: list[str]) -> argparse.ArgumentParser:
         "--sync",
         action="store_true",
         help="Run 'uv sync' before starting, even if the venv looks up to date.",
+    )
+    parser.add_argument(
+        "--host",
+        type=host_address,
+        metavar="HOST",
+        help=(
+            "Address for the server to bind (every server defaults to 0.0.0.0; use "
+            "127.0.0.1 for local-only). Passed as <env-prefix>_HOST, e.g. "
+            "OMNIVOICE_HOST, overriding any value already set."
+        ),
     )
     parser.add_argument(
         "--port",
@@ -318,18 +342,27 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
     try:
         env = load_env(repo_root, args.engine)
         # Checked before any sync: a sync that then can't start is wasted time.
-        server_env = dict(os.environ)
-        port_note = ""
-        if args.port is not None:
-            if env.env_prefix is None:
-                raise ServeError(
-                    f"{_display(env.env_dir / 'pyproject.toml', repo_root)} has no "
-                    "[tool.tts-serve] env-prefix entry, so --port can't be applied "
-                    '(set it to the prefix of the server\'s <PREFIX>_PORT, e.g. "OMNIVOICE").'
-                )
-            port_var = f"{env.env_prefix}_PORT"
-            server_env[port_var] = str(args.port)
-            port_note = f" ({port_var}={args.port})"
+        requested = [
+            (flag, suffix, value)
+            for flag, suffix, value in (
+                ("--host", "HOST", args.host),
+                ("--port", "PORT", args.port),
+            )
+            if value is not None
+        ]
+        if requested and env.env_prefix is None:
+            flags = " and ".join(flag for flag, _, _ in requested)
+            raise ServeError(
+                f"{_display(env.env_dir / 'pyproject.toml', repo_root)} has no "
+                f"[tool.tts-serve] env-prefix entry, so {flags} can't be applied "
+                "(set it to the prefix of the server's <PREFIX>_HOST / <PREFIX>_PORT "
+                'variables, e.g. "OMNIVOICE").'
+            )
+        overrides = {f"{env.env_prefix}_{suffix}": str(value) for _, suffix, value in requested}
+        server_env = {**os.environ, **overrides}
+        override_note = (
+            " (" + ", ".join(f"{k}={v}" for k, v in overrides.items()) + ")" if overrides else ""
+        )
         python = venv_python(env.env_dir)
         reason = sync_reason(env, repo_root, force=args.sync)
         if reason is not None:
@@ -351,7 +384,7 @@ def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
 
     print(
         f"Starting {_display(env.server, repo_root)} with {_display(python, repo_root)}"
-        f"{port_note}",
+        f"{override_note}",
         flush=True,
     )
     try:

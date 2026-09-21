@@ -65,8 +65,9 @@ The launcher (`tools/serve.py`, stdlib-only, Python 3.11+) builds
 use, then starts the server. On later starts it re-runs `uv sync` only when
 the env's pyproject, its `.python-version`, or the Chatterbox checkout's
 `pyproject.toml` has changed. Use `--sync` to force a sync, `--port N` to run
-on a port other than 7500 (it sets `CHATTERBOX_PORT`), and `--list` to see each
-env's status. By hand, it's `uv sync --project envs/chatterbox`, then
+on a port other than 7500 (it sets `CHATTERBOX_PORT`), `--host 127.0.0.1` for a
+local-only server (it sets `CHATTERBOX_HOST`), and `--list` to see each env's
+status. By hand, it's `uv sync --project envs/chatterbox`, then
 `envs/chatterbox/.venv/bin/python impl/server_chatterbox.py`.
 
 - Chatterbox and `tts-engine-common` are installed editable, so after a
