@@ -41,7 +41,8 @@ Note: you can install multiple engines on the same server, provided they
 each have their own environment (venv, conda). Do not install multiple engines
 in the same environment - their dependency trees will conflict. With `uv`, some
 engines can also get a dedicated environment built from a local git checkout
-of the engine (see `envs/` and the engine's document).
+of the engine, and started with `python3 tools/serve.py <engine>` (see `envs/`
+and the engine's document).
 
 Once up and running, you can use the supplied `speak.py` tool to talk to it:
 
@@ -106,7 +107,7 @@ tts-engine-common/   Shared FastAPI/Pydantic package (no torch): capabilities
                      derivation, core models, /capabilities route, helpers.
 impl/                The eight engine servers + their (GPU-free) tests.
 envs/                Optional per-engine uv environments (local engine checkouts).
-tools/               speak.py command-line testing tool.
+tools/               speak.py command-line testing tool; serve.py envs/ launcher.
 docs/                Design documents.
 ```
 

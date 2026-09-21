@@ -50,20 +50,28 @@ left alone. Clone OmniVoice next to tts-serve:
 git clone https://github.com/k2-fsa/OmniVoice
 git clone https://github.com/scorbo2/tts-serve
 cd tts-serve
+python3 tools/serve.py omnivoice
+```
+
+The launcher (`tools/serve.py`, stdlib-only, Python 3.11+) builds
+`envs/omnivoice/.venv` from
+[`envs/omnivoice/pyproject.toml`](../envs/omnivoice/pyproject.toml) on first
+use, then starts the server. On later starts it re-runs `uv sync` only when
+the env's pyproject, its `.python-version`, or the OmniVoice checkout's
+`pyproject.toml` has changed. Use `--sync` to force a sync, and `--list` to see
+each env's status.
+
+Without the launcher, the same steps by hand are:
+
+```
 uv sync --project envs/omnivoice
-```
-
-This creates `envs/omnivoice/.venv` from
-[`envs/omnivoice/pyproject.toml`](../envs/omnivoice/pyproject.toml). Start the
-server with:
-
-```
 uv run --project envs/omnivoice python impl/server_omnivoice.py
 ```
 
 `uv run` re-checks the environment on every start, which may need network
 access. To skip that (e.g. offline), run the venv's Python directly:
-`envs/omnivoice/.venv/bin/python impl/server_omnivoice.py`.
+`envs/omnivoice/.venv/bin/python impl/server_omnivoice.py`. The launcher does
+this for you.
 
 - OmniVoice and `tts-engine-common` are installed editable, so after a
   `git pull` in either one you only need to restart the server.

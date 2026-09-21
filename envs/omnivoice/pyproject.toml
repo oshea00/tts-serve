@@ -4,6 +4,10 @@
 # This is a virtual project (nothing here is installed as a package): it only
 # describes the venv. From the tts-serve repo root:
 #
+#     python3 tools/serve.py omnivoice      # syncs when needed, then starts
+#
+# or by hand:
+#
 #     uv sync --project envs/omnivoice
 #     uv run --project envs/omnivoice python impl/server_omnivoice.py
 #
@@ -44,6 +48,10 @@ dependencies = [
     "torch",
     "torchaudio",
 ]
+
+[tool.tts-serve]
+# Server started by tools/serve.py (path relative to the repo root).
+server = "impl/server_omnivoice.py"
 
 [tool.uv]
 package = false

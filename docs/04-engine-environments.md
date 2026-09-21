@@ -98,7 +98,12 @@ and its own venv are left alone.
 - **Torch pins are `override-dependencies`, not `constraint-dependencies`.**
   Start from the engine's own pins and add an aarch64 Linux entry (cu130,
   torch ≥ 2.9) wherever the engine only knows cu128.
-- **Header comment.** Say what the file is for, the two commands to use it, the
+- **Server script.** A `[tool.tts-serve]` table names the server this env
+  runs, as a path relative to the repo root:
+  `server = "impl/server_<name>.py"`. uv ignores tables under `tool.*` that
+  aren't its own. The launcher reads this key because server script names don't
+  follow env names (`server_qwen3TTS.py`, `server_fasterQwen3TTS.py`, ...).
+- **Header comment.** Say what the file is for, the commands to use it, the
   sibling-checkout convention, how to point at a checkout elsewhere, and why the
   torch pins are overrides.
 
@@ -110,7 +115,13 @@ hardlinks them instead of downloading them again.
 
 ### Usage
 
-From the tts-serve repo root:
+The simplest way is the launcher (next section):
+
+```
+python3 tools/serve.py <engine>          # sync the venv if needed, then start the server
+```
+
+or directly with uv, from the tts-serve repo root:
 
 ```
 uv sync --project envs/<engine>                                  # build or update the venv
@@ -119,6 +130,89 @@ envs/<engine>/.venv/bin/python impl/server_<name>.py            # same, without 
 ```
 
 The server's `<ENGINE>_*` environment variables work unchanged.
+
+### Launcher: `tools/serve.py`
+
+One command starts any engine that has an env, and runs `uv sync` only when
+the env actually needs it.
+
+```
+python3 tools/serve.py omnivoice                 # sync if needed, then start the server
+python3 tools/serve.py omnivoice --sync          # always run uv sync first
+python3 tools/serve.py --list                    # every env, its server, and its venv status
+OMNIVOICE_PORT=8500 python3 tools/serve.py omnivoice
+```
+
+**Constraints**
+
+- Standard library only, like `speak.py`, so it runs on the system `python3`
+  with nothing installed.
+- Needs Python 3.11+ for `tomllib`. On an older Python it fails with a clear
+  error, not a traceback.
+- Works from any working directory. All paths are resolved from the script's
+  own location.
+
+**Arguments**
+
+- `ENGINE` (positional): the name of a directory under `envs/` that contains a
+  `pyproject.toml`. An unknown name is a usage error (exit 2) that lists the
+  available envs. `ENGINE` may be omitted only with `--list`.
+- `--sync`: run `uv sync` before starting, even if the venv looks up to date.
+- `--list`: print each env with its server script and venv status, then exit 0.
+  The status is one of:
+  - `ready`;
+  - `not built`;
+  - `needs sync (<reason>)`;
+  - `error: <message>`, for a broken env definition.
+
+**When to sync.** The launcher runs `uv sync --project envs/<engine>` when any
+of these is true:
+
+1. `--sync` was given.
+2. The venv's Python doesn't exist yet: `.venv/bin/python`, or
+   `.venv/Scripts/python.exe` on Windows.
+3. The venv has no sync stamp. After every successful sync, the launcher
+   touches `envs/<engine>/.venv/.tts-serve-synced`, which is gitignored along
+   with the rest of the `.venv`. A venv built by a manual `uv sync` has no
+   stamp, so the launcher syncs it once.
+4. One of the env's inputs is newer than the stamp. The inputs are the env's
+   `pyproject.toml`, its `.python-version`, and the `pyproject.toml` of every
+   local path source in `[tool.uv.sources]` (the engine checkout and
+   `tts-engine-common`). A `git pull` that changes the engine's dependencies
+   therefore triggers a sync on the next start. A pull that only changes code
+   doesn't, because editable installs pick up code changes by themselves.
+
+It prints `Syncing envs/<engine> (<reason>) ...` before each sync. It removes
+`VIRTUAL_ENV` from uv's environment, so an unrelated activated venv doesn't
+produce uv's "does not match the project environment" warning.
+
+**Sync failures**
+
+| Situation | Result |
+|---|---|
+| `uv` isn't on `PATH` and a sync is needed | Exit 1 with a pointer to the uv install docs. When no sync is needed, uv isn't required at all. |
+| Sync fails, the venv exists, and `--sync` wasn't given | Print a warning and start with the existing venv. This keeps the server startable offline. The stamp isn't touched, so the next start tries again. |
+| Sync fails with `--sync` given, or the venv doesn't exist | Exit 1. |
+
+**Start.** The launcher prints
+`Starting <server> with <venv python>`, flushes stdout, and **replaces itself**
+(`os.execv`) with `<venv python> <server>`. It doesn't go through `uv run`,
+which re-resolves on every start (see "Known quirks"). The working directory
+and environment variables are inherited unchanged, so relative paths in
+`<ENGINE>_*` variables behave exactly as when the script is run directly.
+Because the process is replaced, Ctrl+C goes straight to uvicorn.
+
+**Errors.** These exit 1 with an `Error:` message on stderr:
+
+- a malformed `pyproject.toml`;
+- a missing or non-string `[tool.tts-serve] server`;
+- a server script that doesn't exist;
+- a failed `exec`.
+
+**Tests.** `tools/tests/test_serve.py`, GPU-free and without network access.
+The tests build fake repos in `tmp_path` and stub `uv`, `subprocess` and
+`os.execv`. One test also checks the committed `envs/*/pyproject.toml` files:
+each must name a server script that exists.
 
 ### Boundaries
 
@@ -183,12 +277,41 @@ Known quirks (harmless, recorded so nobody chases them):
 - **torch 2.9.1 warns about the GB10** (CUDA capability 12.1 vs a supported
   maximum of 12.0). Synthesis works anyway.
 
+### Launcher (2026-09)
+
+`tools/serve.py` and `tools/tests/test_serve.py` implement the "Launcher"
+section above. `envs/omnivoice/pyproject.toml` gained
+`[tool.tts-serve] server = "impl/server_omnivoice.py"`. It was verified on the
+GB10 with the system Python 3.12:
+
+- The first start synced once. The existing venv had been built by a manual
+  `uv sync`, so it had no stamp.
+- The second start reported `ready` and went straight to the server.
+- `OMNIVOICE_PORT=7501` reached the server.
+- The server's parent process was the calling shell, which confirms the
+  launcher replaced itself rather than staying around as a wrapper.
+
+Decisions taken while implementing:
+
+- **A stamp file rather than `uv sync --check`.** A check re-resolves, which is
+  the per-start cost and network dependency the launcher is meant to avoid (see
+  "Known quirks"). Comparing mtimes is local and instant.
+- **Watch the path sources' `pyproject.toml` files, not their code.** Editable
+  installs pick up code changes without a sync; only dependency changes need
+  one.
+- **Keep the caller's working directory.** IndexTTS's `INDEXTTS_MODEL_DIR`
+  defaults to the relative `checkpoints`, so a `chdir` would silently change
+  what it points at.
+- **Never resolve the venv's `python` symlink.** Running the base interpreter
+  it points to would bypass the venv entirely.
+
 ## Adding an environment for another engine
 
 1. Clone the engine next to tts-serve. If it has its own venv, note that venv's
    Python version and torch build.
 2. Copy `envs/omnivoice/` to `envs/<engine>/`. Change the project name, the
-   engine requirement, and its path source. If the engine's install needs
+   `[tool.tts-serve] server` script, the engine requirement, and its path
+   source. If the engine's install needs
    extras or git-only dependencies (IndexTTS's `--all-extras`, LuxTTS's
    git-only `linacodec`), express them here: extras on the engine requirement,
    git sources for the rest.
@@ -199,7 +322,8 @@ Known quirks (harmless, recorded so nobody chases them):
    sources or indexes.
 4. Set `.python-version`.
 5. Verify, following the same checks as the OmniVoice implementation above:
-   - `uv sync --project envs/<engine>` succeeds;
+   - `python3 tools/serve.py <engine>` syncs the venv and starts the server
+     (or run `uv sync --project envs/<engine>` directly);
    - torch imports with the expected version, and CUDA is available where
      expected;
    - the engine imports from the checkout;
@@ -225,5 +349,4 @@ Candidates, from the current install docs (none done yet):
 - **Checkout outside the sibling layout.** Today the user edits the committed
   path locally, which then shows up as a modification in `git status`. If that
   becomes common, a non-committed override mechanism may be worth adding.
-- **Shared launcher.** Is a small `envs/run <engine>` wrapper worth having, or
-  are `uv run --project` and the direct `.venv/bin/python` command enough?
+- ~~**Shared launcher.**~~ Resolved: `tools/serve.py` (see "Launcher").
