@@ -305,6 +305,49 @@ Decisions taken while implementing:
 - **Never resolve the venv's `python` symlink.** Running the base interpreter
   it points to would bypass the venv entirely.
 
+### Chatterbox (2026-09)
+
+`envs/chatterbox/` builds the Chatterbox server from a sibling
+`resemble-ai/chatterbox` checkout. For this engine the checkout is **required**:
+`impl/server_chatterbox.py` imports `MULTILINGUAL_T3_MODELS` (the v2/v3 T3
+checkpoints), which arrived with the June 2026 v3 release. The latest PyPI
+release, 0.1.7 from March 2026, doesn't have it. The documented
+`pip install chatterbox-tts` therefore fails at server startup with an
+ImportError. `impl/server_chatterbox.md` now installs from git instead.
+
+It was verified on the GB10 with the launcher:
+
+- `python3 tools/serve.py chatterbox` built the venv in about 3 s, with torch
+  from the uv cache and `resemble-perth` built from git.
+- The first start, including the weight download, took about 40 s. The model
+  loaded was `chatterbox-multilingual-v3` on CUDA.
+- The live `/capabilities` output was identical to the committed snapshot.
+- `tools/speak.py` produced 24 kHz clips in English and French, at RTF
+  0.52–0.56 once warm. Whisper transcribed all of them back word for word,
+  which confirms that torch 2.9.1 (instead of the engine's pinned 2.6.0) gives
+  correct output.
+
+Decisions taken while implementing:
+
+- **Keep the engine's torch pin wherever PyPI can serve it.** Unlike OmniVoice,
+  Chatterbox has no index settings of its own. It pins `torch==2.6.0` and
+  relies on PyPI, whose x86_64 Linux wheels include CUDA 12.4. So the overrides
+  keep 2.6.0 everywhere except linux-aarch64, where no CUDA build of 2.6.0
+  exists; that platform gets 2.9.1 from cu130. Only one index is declared
+  (`pytorch-cuda-sbsa`).
+- **Overrides are still required,** because the engine's `==2.6.0` has to be
+  *replaced* on aarch64. A constraint can only narrow a requirement, so it
+  couldn't turn 2.6.0 into 2.9.1.
+- **`requires-python = ">=3.10,<3.14"`.** Chatterbox pins torch 2.6.0 only
+  below Python 3.14, and has no tested pin for 3.14. Python is pinned to 3.13,
+  like OmniVoice: numpy 2.x on 3.13, and the same cached cp313 torch wheels.
+- **torchaudio 2.9 is safe for this engine.** Chatterbox only uses
+  `transforms.Resample` and `compliance.kaldi.fbank`, not the `load`/`save`
+  functions that moved to TorchCodec in 2.9.
+
+Side effect worth knowing: on first use, the engine downloads a spaCy/pkuseg
+segmentation model to `~/.pkuseg/`, outside the HuggingFace cache.
+
 ## Adding an environment for another engine
 
 1. Clone the engine next to tts-serve. If it has its own venv, note that venv's
@@ -317,9 +360,16 @@ Decisions taken while implementing:
    git sources for the rest.
 3. Read the engine's own `pyproject.toml`. Copy its torch index names, URLs and
    pins, turn any `constraint-dependencies` into `override-dependencies`, and
-   add the aarch64 Linux cu130 entry if the engine lacks one. An engine without
-   CUDA torch (for example Qwen3-TTS MLX on Apple Silicon) needs no torch
-   sources or indexes.
+   add the aarch64 Linux cu130 entry if the engine lacks one. If the engine has
+   no index settings and just pins a PyPI torch (as Chatterbox does), keep that
+   pin where PyPI has a usable build and override only linux-aarch64 (see the
+   Chatterbox record above). Also check that the engine doesn't rely on
+   torchaudio's `load`/`save`, which moved to TorchCodec in 2.9. An engine
+   without CUDA torch (for example Qwen3-TTS MLX on Apple Silicon) needs no
+   torch sources or indexes.
+   Also compare the engine's PyPI release with what the server imports. PyPI
+   can lag behind git (Chatterbox did), and then a checkout is the only
+   working install.
 4. Set `.python-version`.
 5. Verify, following the same checks as the OmniVoice implementation above:
    - `python3 tools/serve.py <engine>` syncs the venv and starts the server
@@ -335,13 +385,14 @@ Decisions taken while implementing:
    section to `impl/server_<name>.md`, and list the new directory in the `envs/`
    bullet of `AGENTS.md`.
 
-Candidates, from the current install docs (none done yet):
+Done so far: OmniVoice and Chatterbox. Remaining candidates, from the current
+install docs:
 
 | Engine | Current install | Why an env would help |
 |---|---|---|
 | IndexTTS | `uv sync --all-extras` in the engine clone, tts-serve deps pip-installed into that venv | Problems 1 and 2: that uv venv has no pip, so the documented `pip install` reaches the system pip; and even when the deps are installed, the next `uv sync` there removes them |
 | LuxTTS | git-only, plus a git-only dependency | No PyPI route exists, so a checkout is the only option |
-| Chatterbox, Qwen3-TTS, faster-qwen3-tts, dots.tts | PyPI | Only needed for problem 4 (hardware-specific torch) or to run from a checkout |
+| Qwen3-TTS, faster-qwen3-tts, dots.tts | PyPI | Needed for problem 4 (hardware-specific torch), to run from a checkout, or if PyPI lags behind what the server imports (check this first) |
 | Qwen3-TTS MLX | PyPI (`mlx-audio`) | Low value: no CUDA torch involved |
 
 ## Open questions
