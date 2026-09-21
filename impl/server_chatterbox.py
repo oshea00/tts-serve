@@ -29,6 +29,11 @@ Configuration (environment variables):
     CHATTERBOX_PORT      Bind port for `python server_chatterbox.py`.
                          Default: 7500
 
+The chatterbox-tts package must come from git
+(pip install git+https://github.com/resemble-ai/chatterbox.git): PyPI 0.1.7
+predates the v3 checkpoints and lacks MULTILINGUAL_T3_MODELS.  Or use the uv
+environment in envs/chatterbox/ (python3 tools/serve.py chatterbox).
+
 Extra dependencies beyond the chatterbox-tts package:
     pip install fastapi uvicorn loguru soundfile
     pip install ../tts-engine-common # in-repo copy; or: pip install -e ../tts-engine-common
