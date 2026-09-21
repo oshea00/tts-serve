@@ -75,6 +75,8 @@ access. To skip that (e.g. offline), run the venv's Python directly:
   torch 2.9.1 from the cu130 index, because there are no aarch64 cu128 wheels.
   Other Linux and Windows machines get torch 2.8.0 from cu128, the same as
   OmniVoice's own setup. This works with an unmodified OmniVoice checkout.
+- The design behind `envs/` is in
+  [`docs/04-engine-environments.md`](../docs/04-engine-environments.md).
 
 ### Changing host
 

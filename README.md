@@ -149,6 +149,7 @@ supplementing it with a newer/supplemental one. This avoids code/spec drift over
 - [`docs/01-server-generification.md`](docs/01-server-generification.md) — `/capabilities` design and open questions
 - [`docs/02-language-handling.md`](docs/02-language-handling.md) — Amendments to `language` parameter handling
 - [`docs/03-speak-script.md`](docs/03-speak-script.md) — addition of a handy command-line testing tool
+- [`docs/04-engine-environments.md`](docs/04-engine-environments.md) — per-engine uv environments built from local engine checkouts
 
 ## Release notes
 
