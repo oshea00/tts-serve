@@ -346,10 +346,12 @@ Decisions taken while implementing:
 `envs/chatterbox/` builds the Chatterbox server from a sibling
 `resemble-ai/chatterbox` checkout. For this engine the checkout is **required**:
 `impl/server_chatterbox.py` imports `MULTILINGUAL_T3_MODELS` (the v2/v3 T3
-checkpoints), which arrived with the June 2026 v3 release. The latest PyPI
-release, 0.1.7 from March 2026, doesn't have it. The documented
-`pip install chatterbox-tts` therefore fails at server startup with an
-ImportError. `impl/server_chatterbox.md` now installs from git instead.
+checkpoints). It was added in resemble-ai/chatterbox#516 on 2026-05-01, ahead
+of the v3 multilingual release on 2026-06-10. The latest PyPI release, 0.1.7
+from March 2026, doesn't have it. The checkout's own `pyproject.toml` also
+says 0.1.7, so the version number can't tell the two installs apart. The
+documented `pip install chatterbox-tts` therefore fails at server startup with
+an ImportError. `impl/server_chatterbox.md` now installs from git instead.
 
 It was verified on the GB10 with the launcher:
 
