@@ -106,7 +106,8 @@ and its own venv are left alone.
 - **Env-var prefix.** `env-prefix = "<PREFIX>"`, in the same table, gives the
   prefix of the server's `<PREFIX>_HOST` / `<PREFIX>_PORT` variables
   (`OMNIVOICE`, `CHATTERBOX`, `DOTS_TTS`, `QWEN3TTS_MLX`, ...). The launcher
-  needs it for `--port`, because these prefixes don't follow env names either.
+  needs it for `--host` and `--port`, because these prefixes don't follow env
+  names either.
   It is uppercase letters, digits and underscores, starting with a letter.
 - **Header comment.** Say what the file is for, the commands to use it, the
   sibling-checkout convention, how to point at a checkout elsewhere, and why the
@@ -146,6 +147,7 @@ python3 tools/serve.py omnivoice                 # sync if needed, then start th
 python3 tools/serve.py omnivoice --sync          # always run uv sync first
 python3 tools/serve.py --list                    # every env, its server, and its venv status
 python3 tools/serve.py chatterbox --port 7501    # run next to another engine on 7500
+python3 tools/serve.py omnivoice --host 127.0.0.1   # local-only (default is 0.0.0.0)
 OMNIVOICE_PORT=8500 python3 tools/serve.py omnivoice   # server env vars still work
 ```
 
@@ -172,6 +174,12 @@ at least one override.
   server as `<env-prefix>_PORT`, overriding any value already set in the
   environment, so the flag always wins. If the env's pyproject has no
   `env-prefix`, `--port` fails with exit 1.
+- `--host HOST`: the address the server binds; every server defaults to
+  `0.0.0.0`. Use `127.0.0.1` for a local-only server. It works like `--port`:
+  it's passed as `<env-prefix>_HOST`, the flag wins over the environment, and
+  it fails with exit 1 without `env-prefix`. The value must be non-empty and
+  contain no whitespace (otherwise exit 2). Anything else, such as an address
+  the machine doesn't have, is left for the server to reject when it binds.
 - `--list`: print each env with its server script and venv status, then exit 0.
   The status is one of:
   - `ready`;
@@ -209,12 +217,13 @@ produce uv's "does not match the project environment" warning.
 | Sync fails with `--sync` given, or the venv doesn't exist | Exit 1. |
 
 **Start.** The launcher prints
-`Starting <server> with <venv python>`, adding ` (<PREFIX>_PORT=<port>)` when
-`--port` is given. It flushes stdout, then **replaces itself** (`os.execve`)
+`Starting <server> with <venv python>`. When `--host` or `--port` is given, it
+appends the variables it set, e.g. ` (OMNIVOICE_HOST=127.0.0.1, OMNIVOICE_PORT=7501)`.
+It flushes stdout, then **replaces itself** (`os.execve`)
 with `<venv python> <server>`. It doesn't go through `uv run`, which
 re-resolves on every start (see "Known quirks"). The working directory and
 environment variables are inherited unchanged, except for the
-`<PREFIX>_PORT` that `--port` sets. So relative paths in `<ENGINE>_*`
+`<PREFIX>_HOST` / `<PREFIX>_PORT` that `--host` / `--port` set. So relative paths in `<ENGINE>_*`
 variables behave exactly as when the script is run directly. Because the
 process is replaced, Ctrl+C goes straight to uvicorn.
 
@@ -224,15 +233,16 @@ process is replaced, Ctrl+C goes straight to uvicorn.
 - a missing or non-string `[tool.tts-serve] server`;
 - a server script that doesn't exist;
 - a malformed `env-prefix`;
-- `--port` for an env without `env-prefix`;
+- `--host` or `--port` for an env without `env-prefix`. The message names the
+  flags that were given, and nothing is synced first;
 - a failed `exec`.
 
 **Tests.** `tools/tests/test_serve.py`, GPU-free and without network access.
 The tests build fake repos in `tmp_path` and stub `uv`, `subprocess` and
 `os.execve`. One test also checks the committed `envs/*/pyproject.toml` files.
 Each must name a server script that exists, and an `env-prefix` whose
-`<PREFIX>_PORT` that script actually reads, so the prefix can't drift away from
-the server.
+`<PREFIX>_HOST` and `<PREFIX>_PORT` that script actually reads, so the prefix
+can't drift away from the server.
 
 ### Boundaries
 
@@ -311,6 +321,9 @@ GB10 with the system Python 3.12:
 - After `--port` was added, `serve.py omnivoice --port 7503` and
   `serve.py chatterbox --port 7502` ran side by side, next to another OmniVoice
   server on the default 7500. Both answered `/health`.
+- `serve.py chatterbox --host 127.0.0.1 --port 7502` bound to loopback only:
+  `127.0.0.1:7502` answered, and the machine's other interface address was
+  refused.
 - The server's parent process was the calling shell, which confirms the
   launcher replaced itself rather than staying around as a wrapper.
 
