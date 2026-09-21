@@ -103,6 +103,11 @@ and its own venv are left alone.
   `server = "impl/server_<name>.py"`. uv ignores tables under `tool.*` that
   aren't its own. The launcher reads this key because server script names don't
   follow env names (`server_qwen3TTS.py`, `server_fasterQwen3TTS.py`, ...).
+- **Env-var prefix.** `env-prefix = "<PREFIX>"`, in the same table, gives the
+  prefix of the server's `<PREFIX>_HOST` / `<PREFIX>_PORT` variables
+  (`OMNIVOICE`, `CHATTERBOX`, `DOTS_TTS`, `QWEN3TTS_MLX`, ...). The launcher
+  needs it for `--port`, because these prefixes don't follow env names either.
+  It is uppercase letters, digits and underscores, starting with a letter.
 - **Header comment.** Say what the file is for, the commands to use it, the
   sibling-checkout convention, how to point at a checkout elsewhere, and why the
   torch pins are overrides.
@@ -140,8 +145,12 @@ the env actually needs it.
 python3 tools/serve.py omnivoice                 # sync if needed, then start the server
 python3 tools/serve.py omnivoice --sync          # always run uv sync first
 python3 tools/serve.py --list                    # every env, its server, and its venv status
-OMNIVOICE_PORT=8500 python3 tools/serve.py omnivoice
+python3 tools/serve.py chatterbox --port 7501    # run next to another engine on 7500
+OMNIVOICE_PORT=8500 python3 tools/serve.py omnivoice   # server env vars still work
 ```
+
+Every server defaults to port 7500, so running two engines at once requires
+at least one override.
 
 **Constraints**
 
@@ -158,6 +167,11 @@ OMNIVOICE_PORT=8500 python3 tools/serve.py omnivoice
   `pyproject.toml`. An unknown name is a usage error (exit 2) that lists the
   available envs. `ENGINE` may be omitted only with `--list`.
 - `--sync`: run `uv sync` before starting, even if the venv looks up to date.
+- `--port PORT`: the port the server binds, an integer from 1 to 65535
+  (anything else is a usage error, exit 2). The launcher passes it to the
+  server as `<env-prefix>_PORT`, overriding any value already set in the
+  environment, so the flag always wins. If the env's pyproject has no
+  `env-prefix`, `--port` fails with exit 1.
 - `--list`: print each env with its server script and venv status, then exit 0.
   The status is one of:
   - `ready`;
@@ -195,24 +209,30 @@ produce uv's "does not match the project environment" warning.
 | Sync fails with `--sync` given, or the venv doesn't exist | Exit 1. |
 
 **Start.** The launcher prints
-`Starting <server> with <venv python>`, flushes stdout, and **replaces itself**
-(`os.execv`) with `<venv python> <server>`. It doesn't go through `uv run`,
-which re-resolves on every start (see "Known quirks"). The working directory
-and environment variables are inherited unchanged, so relative paths in
-`<ENGINE>_*` variables behave exactly as when the script is run directly.
-Because the process is replaced, Ctrl+C goes straight to uvicorn.
+`Starting <server> with <venv python>`, adding ` (<PREFIX>_PORT=<port>)` when
+`--port` is given. It flushes stdout, then **replaces itself** (`os.execve`)
+with `<venv python> <server>`. It doesn't go through `uv run`, which
+re-resolves on every start (see "Known quirks"). The working directory and
+environment variables are inherited unchanged, except for the
+`<PREFIX>_PORT` that `--port` sets. So relative paths in `<ENGINE>_*`
+variables behave exactly as when the script is run directly. Because the
+process is replaced, Ctrl+C goes straight to uvicorn.
 
 **Errors.** These exit 1 with an `Error:` message on stderr:
 
 - a malformed `pyproject.toml`;
 - a missing or non-string `[tool.tts-serve] server`;
 - a server script that doesn't exist;
+- a malformed `env-prefix`;
+- `--port` for an env without `env-prefix`;
 - a failed `exec`.
 
 **Tests.** `tools/tests/test_serve.py`, GPU-free and without network access.
 The tests build fake repos in `tmp_path` and stub `uv`, `subprocess` and
-`os.execv`. One test also checks the committed `envs/*/pyproject.toml` files:
-each must name a server script that exists.
+`os.execve`. One test also checks the committed `envs/*/pyproject.toml` files.
+Each must name a server script that exists, and an `env-prefix` whose
+`<PREFIX>_PORT` that script actually reads, so the prefix can't drift away from
+the server.
 
 ### Boundaries
 
@@ -288,6 +308,9 @@ GB10 with the system Python 3.12:
   `uv sync`, so it had no stamp.
 - The second start reported `ready` and went straight to the server.
 - `OMNIVOICE_PORT=7501` reached the server.
+- After `--port` was added, `serve.py omnivoice --port 7503` and
+  `serve.py chatterbox --port 7502` ran side by side, next to another OmniVoice
+  server on the default 7500. Both answered `/health`.
 - The server's parent process was the calling shell, which confirms the
   launcher replaced itself rather than staying around as a wrapper.
 
@@ -353,7 +376,7 @@ segmentation model to `~/.pkuseg/`, outside the HuggingFace cache.
 1. Clone the engine next to tts-serve. If it has its own venv, note that venv's
    Python version and torch build.
 2. Copy `envs/omnivoice/` to `envs/<engine>/`. Change the project name, the
-   `[tool.tts-serve] server` script, the engine requirement, and its path
+   `[tool.tts-serve]` `server` and `env-prefix`, the engine requirement, and its path
    source. If the engine's install needs
    extras or git-only dependencies (IndexTTS's `--all-extras`, LuxTTS's
    git-only `linacodec`), express them here: extras on the engine requirement,

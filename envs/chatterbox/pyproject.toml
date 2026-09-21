@@ -60,6 +60,9 @@ dependencies = [
 [tool.tts-serve]
 # Server started by tools/serve.py (path relative to the repo root).
 server = "impl/server_chatterbox.py"
+# Prefix of the server's <PREFIX>_HOST / <PREFIX>_PORT variables; lets
+# `tools/serve.py chatterbox --port N` set CHATTERBOX_PORT.
+env-prefix = "CHATTERBOX"
 
 [tool.uv]
 package = false
