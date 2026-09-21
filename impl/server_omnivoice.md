@@ -38,6 +38,44 @@ Start it up!
 python impl/server_omnivoice.py
 ```
 
+### Alternative: from a local OmniVoice git checkout (uv)
+
+If you already have an [OmniVoice](https://github.com/k2-fsa/OmniVoice) git
+checkout, or want to track its latest code, [`uv`](https://docs.astral.sh/uv/)
+can build a venv dedicated to this server that installs OmniVoice straight
+from the checkout. Nothing is installed globally, and OmniVoice's own venv is
+left alone. Clone OmniVoice next to tts-serve:
+
+```
+git clone https://github.com/k2-fsa/OmniVoice
+git clone https://github.com/scorbo2/tts-serve
+cd tts-serve
+uv sync --project envs/omnivoice
+```
+
+This creates `envs/omnivoice/.venv` from
+[`envs/omnivoice/pyproject.toml`](../envs/omnivoice/pyproject.toml). Start the
+server with:
+
+```
+uv run --project envs/omnivoice python impl/server_omnivoice.py
+```
+
+`uv run` re-checks the environment on every start, which may need network
+access. To skip that (e.g. offline), run the venv's Python directly:
+`envs/omnivoice/.venv/bin/python impl/server_omnivoice.py`.
+
+- OmniVoice and `tts-engine-common` are installed editable, so after a
+  `git pull` in either one you only need to restart the server.
+- If your OmniVoice checkout isn't next to tts-serve, edit the `omnivoice` path
+  under `[tool.uv.sources]` in `envs/omnivoice/pyproject.toml`.
+- The environment variables below (`OMNIVOICE_PORT`, `OMNIVOICE_DEVICE`, ...)
+  work unchanged.
+- Linux on aarch64 (e.g. NVIDIA GB10 / DGX Spark, Jetson Thor, GH200) gets CUDA
+  torch 2.9.1 from the cu130 index, because there are no aarch64 cu128 wheels.
+  Other Linux and Windows machines get torch 2.8.0 from cu128, the same as
+  OmniVoice's own setup. This works with an unmodified OmniVoice checkout.
+
 ### Changing host
 
 By default, `0.0.0.0` is used. To force a local-only server:

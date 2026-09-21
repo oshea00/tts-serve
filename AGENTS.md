@@ -17,6 +17,7 @@
 - `impl/` — eight standalone FastAPI server scripts, one per engine: `server_chatterbox.py`, `server_omnivoice.py`, `server_qwen3TTS.py`, `server_qwen3TTS_mlx.py`, `server_fasterQwen3TTS.py`, `server_dotsTTS.py`, `server_indexTTS.py`, `server_luxTTS.py`. Run via `python impl/server_<name>.py` or uvicorn; env config is documented in each module's docstring.
 - `impl/tests/` — GPU-free test suite + committed `/capabilities` snapshots (`snapshots/`).
 - `tools/` — `speak.py`, a command-line testing tool for any engine server: stdlib-only (no torch, no engine deps, no need to install `tts-engine-common`), discovers engine parameters from `GET /capabilities`. GPU-free tests in `tools/tests/` (network and aplay stubbed). Spec: `docs/03-speak-script.md`.
+- `envs/` — optional per-engine uv projects (currently `envs/omnivoice/`) that build a dedicated venv for one server from a sibling engine git checkout plus editable `tts-engine-common`: `uv sync --project envs/<engine>`, then `uv run --project envs/<engine> python impl/server_<name>.py`. Virtual projects (`package = false`); the `.venv` and `uv.lock` are gitignored. Torch pins are `override-dependencies`, not constraints, because uv also applies the checkout's own `tool.uv.sources`. The test suite doesn't use these.
 - `docs/` — design docs; `01-server-generification.md` contains the binding decisions (D1–D7).
 
 ## Architecture facts that change how you work
