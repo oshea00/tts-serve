@@ -386,6 +386,64 @@ Decisions taken while implementing:
 Side effect worth knowing: on first use, the engine downloads a spaCy/pkuseg
 segmentation model to `~/.pkuseg/`, outside the HuggingFace cache.
 
+### IndexTTS (2026-09)
+
+`envs/indextts/` builds the IndexTTS server from a sibling
+`index-tts/index-tts` checkout. For this engine the checkout is **required**:
+`impl/server_indexTTS.py` imports `indextts.infer_v2_5.IndexTTS2`, and the
+latest PyPI `indextts` release only ships the v2 inference stack (no
+`infer_v2_5` module).
+
+This also resolves the two problems IndexTTS motivated in "Current state"
+above: the documented recipe ran `uv sync --all-extras` inside the engine's
+own checkout and then `pip install`ed the tts-serve dependencies into that
+venv, which has no `pip` on `PATH` (problem 1) and gets wiped on the next
+`uv sync` in the engine repo (problem 2). `envs/indextts/` is a separate venv,
+so neither applies.
+
+No extras (`webui`, `deepspeed`, `accel`, `torch_compile`) are requested.
+They're all optional at runtime — `IndexTTS2.__init__` defaults
+`use_deepspeed`/`use_accel`/`use_torch_compile` to `False` and imports
+`deepspeed`/`flash_attn`/`triton` lazily only when asked — and
+`server_indexTTS.py` never turns them on, so `gradio`, `deepspeed` and
+`flash-attn` are skipped rather than pulled in unused.
+
+It was verified on x86_64 Linux (CPython 3.11.13, the engine's own venv
+version, CUDA available) via `python3 tools/serve.py indextts --port 7599`:
+
+- `uv sync --project envs/indextts` resolved 192 packages against IndexTTS's
+  cu128 torch pin (`torch==2.8.0+cu128`), and `torch.cuda.is_available()`
+  returned True.
+- `indextts` and `tts-engine-common` both imported from their checkouts
+  (editable installs); `from indextts.infer_v2_5 import IndexTTS2` succeeded.
+- The launcher synced once (no stamp yet), then started the server, which
+  downloaded the IndexTTS-2.5 checkpoint, w2v-bert, campplus and BigVGAN
+  weights from HuggingFace, compiled BigVGAN's custom CUDA kernel via
+  `torch.utils.cpp_extension`, and came up on `/health`.
+- The live `GET /capabilities` output was identical to
+  `impl/tests/snapshots/indextts_capabilities.json` except `device` (`"cuda"`,
+  expected for this auto-select engine).
+- IndexTTS's own `torchaudio.save()`/`load()` wrappers
+  (`indextts/utils/common.py`) already detect and branch on the TorchCodec
+  change in torchaudio 2.9 (see `_torchaudio_honors_wav_encoding_args()`), so
+  the aarch64 override to 2.9.1 needs no server-side workaround (not
+  exercised directly, since this run was x86_64).
+
+Decisions taken while implementing:
+
+- **Keep the engine's torch pin wherever its own cu128 index can serve it.**
+  IndexTTS pins `torch/torchaudio==2.8.*` and sends Linux/Windows to its own
+  `pytorch-cuda` (cu128) index — reused here under the same name. As with
+  OmniVoice, cu128 has no aarch64 (SBSA) wheels, so aarch64 Linux is
+  overridden to 2.9.1 from a `pytorch-cuda-sbsa` (cu130) index.
+- **Overrides, not constraints,** for the same reason as OmniVoice and
+  Chatterbox: the engine's own `tool.uv.sources` sends aarch64 through the
+  same cu128 index it uses everywhere else, and an override is needed to
+  replace that, not just narrow it.
+- **`requires-python = ">=3.10,<3.12"`**, copied from the engine's own pin
+  (torch 2.8.* has no tested pin past it), with `.python-version = "3.11"` to
+  match the engine's own venv and reuse its cached wheels.
+
 ## Adding an environment for another engine
 
 1. Clone the engine next to tts-serve. If it has its own venv, note that venv's
@@ -423,12 +481,11 @@ segmentation model to `~/.pkuseg/`, outside the HuggingFace cache.
    section to `impl/server_<name>.md`, and list the new directory in the `envs/`
    bullet of `AGENTS.md`.
 
-Done so far: OmniVoice and Chatterbox. Remaining candidates, from the current
-install docs:
+Done so far: OmniVoice, Chatterbox and IndexTTS. Remaining candidates, from
+the current install docs:
 
 | Engine | Current install | Why an env would help |
 |---|---|---|
-| IndexTTS | `uv sync --all-extras` in the engine clone, tts-serve deps pip-installed into that venv | Problems 1 and 2: that uv venv has no pip, so the documented `pip install` reaches the system pip; and even when the deps are installed, the next `uv sync` there removes them |
 | LuxTTS | git-only, plus a git-only dependency | No PyPI route exists, so a checkout is the only option |
 | Qwen3-TTS, faster-qwen3-tts, dots.tts | PyPI | Needed for problem 4 (hardware-specific torch), to run from a checkout, or if PyPI lags behind what the server imports (check this first) |
 | Qwen3-TTS MLX | PyPI (`mlx-audio`) | Low value: no CUDA torch involved |

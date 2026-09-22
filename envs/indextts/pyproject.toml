@@ -1,0 +1,102 @@
+# Dedicated uv environment for impl/server_indexTTS.py, built from a local
+# IndexTTS git checkout instead of the PyPI package.
+#
+# The checkout is required, not just convenient: the server imports
+# indextts.infer_v2_5.IndexTTS2 (the IndexTTS-2.5 inference stack). The latest
+# PyPI release of `indextts` only ships the v2 stack, which has no
+# infer_v2_5 module.
+#
+# This is a virtual project (nothing here is installed as a package): it only
+# describes the venv. From the tts-serve repo root:
+#
+#     python3 tools/serve.py indextts      # syncs when needed, then starts
+#
+# or by hand:
+#
+#     uv sync --project envs/indextts
+#     uv run --project envs/indextts python impl/server_indexTTS.py
+#
+# The venv lands in envs/indextts/.venv; it and uv.lock are gitignored.
+#
+# IndexTTS is expected to be cloned next to tts-serve:
+#
+#     <parent>/index-tts    (https://github.com/index-tts/index-tts)
+#     <parent>/tts-serve
+#
+# If your checkout lives elsewhere, edit the `indextts` path under
+# [tool.uv.sources] below. Both IndexTTS and tts-engine-common are installed
+# editable, so a `git pull` in either takes effect on the next server start.
+#
+# No extras (webui/deepspeed/accel/torch_compile) are requested: they are all
+# optional at runtime (use_deepspeed=False etc. by default) and
+# server_indexTTS.py never turns them on, so gradio/deepspeed/flash-attn are
+# skipped rather than pulled in unused.
+#
+# Torch: IndexTTS pins torch/torchaudio 2.8.* and sends Linux/Windows to its
+# own cu128 index (no aarch64 CUDA wheels exist for 2.8.*). That pin is kept
+# everywhere PyPI/the cu128 index serve a usable build. aarch64 Linux (GB10 /
+# Grace-Blackwell, Jetson Thor, GH200) is overridden to torch 2.9.1 from the
+# cu130 index, the earliest aarch64 CUDA release. Overrides, not constraints,
+# because the engine's own ==2.8.* pin has to be replaced, not narrowed, on
+# that platform. IndexTTS's own torchaudio.save()/load() wrappers
+# (indextts/utils/common.py) already branch on the TorchCodec change in
+# torchaudio 2.9, so the override is safe.
+
+[project]
+name = "tts-serve-env-indextts"
+version = "0.1.0"
+description = "Environment for the tts-serve IndexTTS server (local IndexTTS checkout)"
+# IndexTTS pins requires-python = ">=3.10,<3.12"; its own venv uses 3.11.
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "indextts",
+    "tts-engine-common",
+    "fastapi",
+    "uvicorn",
+    "loguru",
+    "soundfile",
+    # Requested explicitly so the CUDA index sources below apply; sources
+    # are not used for transitive dependencies.
+    "torch",
+    "torchaudio",
+]
+
+[tool.tts-serve]
+# Server started by tools/serve.py (path relative to the repo root).
+server = "impl/server_indexTTS.py"
+# Prefix of the server's <PREFIX>_HOST / <PREFIX>_PORT variables; lets
+# `tools/serve.py indextts --host H --port N` set INDEXTTS_HOST / INDEXTTS_PORT.
+env-prefix = "INDEXTTS"
+
+[tool.uv]
+package = false
+override-dependencies = [
+    "torch==2.8.*; sys_platform != 'linux' or platform_machine != 'aarch64'",
+    "torchaudio==2.8.*; sys_platform != 'linux' or platform_machine != 'aarch64'",
+    # Earliest release with aarch64 CUDA wheels.
+    "torch==2.9.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "torchaudio==2.9.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+
+[tool.uv.sources]
+indextts = { path = "../../../index-tts", editable = true }
+tts-engine-common = { path = "../../tts-engine-common", editable = true }
+torch = [
+  { index = "pytorch-cuda-sbsa", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+  { index = "pytorch-cuda", marker = "(sys_platform == 'linux' and platform_machine != 'aarch64') or sys_platform == 'win32'" },
+]
+torchaudio = [
+  { index = "pytorch-cuda-sbsa", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+  { index = "pytorch-cuda", marker = "(sys_platform == 'linux' and platform_machine != 'aarch64') or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu128"
+# Only used where tool.uv.sources asks for it.
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda-sbsa"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

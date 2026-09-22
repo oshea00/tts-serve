@@ -103,4 +103,27 @@ export INDEXTTS_DEVICE=mps
 python impl/server_indexTTS.py
 ```
 
+### Alternative: from a local IndexTTS git checkout (uv)
+
+`envs/indextts/` builds a dedicated venv for this server from a sibling
+IndexTTS checkout, without touching the engine's own venv or needing a
+system `pip`. Clone IndexTTS next to `tts-serve`:
+
+```
+<parent>/index-tts    (https://github.com/index-tts/index-tts)
+<parent>/tts-serve
+```
+
+Then, from the `tts-serve` repo root:
+
+```
+python3 tools/serve.py indextts
+```
+
+This syncs `envs/indextts/.venv` (installing IndexTTS editable from the
+checkout, plus `tts-engine-common` and the tts-serve dependencies) and starts
+`server_indexTTS.py`. `--host` / `--port` and the `INDEXTTS_*` environment
+variables all work as above, e.g. `python3 tools/serve.py indextts --port 7501`
+or `INDEXTTS_USE_QWEN_EMO=1 python3 tools/serve.py indextts`. See
+`docs/04-engine-environments.md` for details.
 
