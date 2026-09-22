@@ -41,6 +41,10 @@
 # that platform. IndexTTS's own torchaudio.save()/load() wrappers
 # (indextts/utils/common.py) already branch on the TorchCodec change in
 # torchaudio 2.9, so the override is safe.
+#
+# aarch64 Linux still fails to sync: pynini (via wetextprocessing) has no
+# aarch64 wheels and needs OpenFst 1.8.x to build. See
+# docs/04-engine-environments.md.
 
 [project]
 name = "tts-serve-env-indextts"

@@ -426,8 +426,18 @@ version, CUDA available) via `python3 tools/serve.py indextts --port 7599`:
 - IndexTTS's own `torchaudio.save()`/`load()` wrappers
   (`indextts/utils/common.py`) already detect and branch on the TorchCodec
   change in torchaudio 2.9 (see `_torchaudio_honors_wav_encoding_args()`), so
-  the aarch64 override to 2.9.1 needs no server-side workaround (not
-  exercised directly, since this run was x86_64).
+  the aarch64 override to 2.9.1 would need no server-side workaround (moot
+  for now: aarch64 fails earlier, see below).
+
+**aarch64 Linux is not supported** (tried on a GB10, Ubuntu 24.04, 2026-09).
+The torch override resolves (2.9.1 from cu130), but the sync fails building
+`pynini` 2.1.7, pulled in via `indextts` → `wetextprocessing` → `pynini`.
+pynini ships x86_64 wheels only; its source build needs OpenFst 1.8.x headers
+and libraries (`fst/util.h`), and Ubuntu 24.04 ships 1.7.9. The dependency
+can't be skipped: on Linux, IndexTTS-2.5 imports WeTextProcessing's `tn` when
+it constructs the model. Possible routes, none taken: build OpenFst 1.8.x into
+a user prefix and point the pynini build at it, or shim `tn` with the
+pynini-free `wetext` package.
 
 Decisions taken while implementing:
 
