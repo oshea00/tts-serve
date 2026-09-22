@@ -107,7 +107,9 @@ python impl/server_indexTTS.py
 
 `envs/indextts/` builds a dedicated venv for this server from a sibling
 IndexTTS checkout, without touching the engine's own venv or needing a
-system `pip`. Clone IndexTTS next to `tts-serve`:
+system `pip`. Works on x86_64 Linux; not on aarch64 Linux, where IndexTTS's
+`pynini` dependency has no wheels and won't build against the distro's OpenFst
+(see `docs/04-engine-environments.md`). Clone IndexTTS next to `tts-serve`:
 
 ```
 <parent>/index-tts    (https://github.com/index-tts/index-tts)
