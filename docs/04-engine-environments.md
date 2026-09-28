@@ -430,7 +430,8 @@ install docs:
 |---|---|---|
 | IndexTTS | `uv sync --all-extras` in the engine clone, tts-serve deps pip-installed into that venv | Problems 1 and 2: that uv venv has no pip, so the documented `pip install` reaches the system pip; and even when the deps are installed, the next `uv sync` there removes them |
 | LuxTTS | git-only, plus a git-only dependency | No PyPI route exists, so a checkout is the only option |
-| Qwen3-TTS, faster-qwen3-tts, dots.tts | PyPI | Needed for problem 4 (hardware-specific torch), to run from a checkout, or if PyPI lags behind what the server imports (check this first) |
+| Qwen3-TTS, faster-qwen3-tts, dots.tts, VoxCPM | PyPI | Needed for problem 4 (hardware-specific torch), to run from a checkout, or if PyPI lags behind what the server imports (check this first) |
+| Breeze TTS 2 | git-only, no packaging: `pip install -r requirements.txt` (torch 2.9.1) in the clone, server run with the repo on `PYTHONPATH` | Would pin the right torch build, but the checkout has no `pyproject.toml`, so it can't be an editable path dependency; the env would install its requirements and `tools/serve.py` would have to set `PYTHONPATH` |
 | Qwen3-TTS MLX | PyPI (`mlx-audio`) | Low value: no CUDA torch involved |
 
 ## Open questions

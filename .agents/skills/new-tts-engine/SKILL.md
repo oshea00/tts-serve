@@ -233,7 +233,7 @@ synthesize with `tools/speak.py` — the suite never exercises a real model.
 ## Gotchas
 
 - Sample rate: the current servers already use three rates — 24 kHz (most), 48 kHz
-  (dots.tts, LuxTTS), 22.05 kHz (IndexTTS) — always read the engine's own constant.
+  (dots.tts, LuxTTS, VoxCPM), 22.05 kHz (IndexTTS) — always read the engine's own constant.
 - `tts-engine-common` must stay torch-free — never import engine or torch symbols there (D7).
 - Language: the API speaks two-letter lowercase codes (docs/02); engine-internal formats
   (names, uppercase codes, auto-detection sentinels) stay in a private mapping inside the
